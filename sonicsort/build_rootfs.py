@@ -11,6 +11,12 @@ here, from a pinned snapshot.debian.org timestamp we choose.
     python sonicsort/build_rootfs.py                      # trixie, start of this ISO week
     python sonicsort/build_rootfs.py --timestamp 2026-10-12T00:00:00Z
     python sonicsort/build_rootfs.py --force              # rebuild even if up to date
+    python sonicsort/build_rootfs.py --arch amd64         # a foreign arch, emulated
+
+With --arch the output is <suite>-slim-<arch>.tar.xz, so a foreign-arch rootfs
+(e.g. amd64 on an Apple Silicon host, for images that must run as amd64) sits
+beside the native one instead of replacing it; build it into an image with
+`docker build --platform linux/<arch> --build-arg ROOTFS_ARCH=<arch> ...`.
 
 Steps:
   1. docker build this repo's Dockerfile -> the debuerreotype tool image
@@ -116,10 +122,15 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def up_to_date(suite: str, timestamp: str) -> bool:
-    """True if sonicsort/rootfs already holds this suite built at this timestamp."""
-    meta = ROOTFS_DIR / f"{suite}-slim.meta.json"
-    tarball = ROOTFS_DIR / f"{suite}-slim.tar.xz"
+def rootfs_stem(suite: str, arch: str | None) -> str:
+    """<suite>-slim for the host's arch, <suite>-slim-<arch> for an explicit --arch."""
+    return f"{suite}-slim-{arch}" if arch else f"{suite}-slim"
+
+
+def up_to_date(suite: str, timestamp: str, arch: str | None = None) -> bool:
+    """True if sonicsort/rootfs already holds this suite/arch built at this timestamp."""
+    meta = ROOTFS_DIR / f"{rootfs_stem(suite, arch)}.meta.json"
+    tarball = ROOTFS_DIR / f"{rootfs_stem(suite, arch)}.tar.xz"
     if not (meta.exists() and tarball.exists()):
         return False
     recorded = json.loads(meta.read_text(encoding="utf-8"))
@@ -128,8 +139,8 @@ def up_to_date(suite: str, timestamp: str) -> bool:
 
 def build(suite: str, timestamp: str, arch: str | None, force: bool) -> Path:
     """Build (or reuse) the slim rootfs; returns the tarball path under sonicsort/rootfs."""
-    tarball = ROOTFS_DIR / f"{suite}-slim.tar.xz"
-    if not force and up_to_date(suite, timestamp):
+    tarball = ROOTFS_DIR / f"{rootfs_stem(suite, arch)}.tar.xz"
+    if not force and up_to_date(suite, timestamp, arch):
         print(f"{tarball.name} already built at {timestamp} -- skipping (--force to rebuild)")
         return tarball
 
@@ -155,7 +166,7 @@ def build(suite: str, timestamp: str, arch: str | None, force: bool) -> Path:
         "debuerreotype": tool_image_tag().split(":", 1)[1],
         "built_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     }
-    (ROOTFS_DIR / f"{suite}-slim.meta.json").write_text(
+    (ROOTFS_DIR / f"{rootfs_stem(suite, arch)}.meta.json").write_text(
         json.dumps(meta, indent=1) + "\n", encoding="utf-8"
     )
     print(f"{tarball} ({tarball.stat().st_size // (1 << 20)} MiB, sha256 {meta['sha256'][:12]}...)")
